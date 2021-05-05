@@ -5,14 +5,20 @@ import org.springframework.stereotype.Service;
 
 import com.netflix.hystrix.contrib.javanica.annotation.HystrixCommand;
 
+import java.time.LocalDate;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import br.com.alura.microservico.loja.client.FornecedorClient;
+import br.com.alura.microservico.loja.client.TransportadorClient;
 import br.com.alura.microservico.loja.controller.dto.CompraDTO;
+import br.com.alura.microservico.loja.controller.dto.InfoEntregaDTO;
 import br.com.alura.microservico.loja.controller.dto.InfoFornecedorDTO;
 import br.com.alura.microservico.loja.controller.dto.InfoPedidoDTO;
+import br.com.alura.microservico.loja.controller.dto.VoucherDTO;
 import br.com.alura.microservico.loja.model.Compra;
+import br.com.alura.microservico.loja.model.CompraStatus;
 import br.com.alura.microservico.loja.repository.CompraRepository;
 
 @Service
@@ -26,6 +32,10 @@ public class CompraService {
 	private FornecedorClient fornecedorClient;
 	
 	@Autowired
+	private TransportadorClient transportadorClient;
+	
+	
+	@Autowired
 	private CompraRepository compraRepository;
 
 	// Para Separar as threads para não travar toda aplicação, usamos um parametro no @HystrixCommand chamado threadPoolKey
@@ -35,6 +45,16 @@ public class CompraService {
 	public Compra getCompraById(Long id) {
 		return compraRepository.findById(id).orElse(new Compra());
 	}
+	
+	
+	public Compra reprocessaCompra(Long id) {
+		return null;
+	}
+	
+	public Compra cancelaCompra(Long id) {
+		return null;
+	}
+	
 	
 	/*
 	 * A anotação @HystrixCommand habilita o circuitbreaker
@@ -54,6 +74,12 @@ public class CompraService {
 	@HystrixCommand( fallbackMethod = "realizaCompraFallback",
 			threadPoolKey = "realizaCompraThreadPool")
     public Compra realizaCompra(CompraDTO compra) {
+		
+		Compra compraSalva = new Compra();
+		compraSalva.setStatus(CompraStatus.RECEBIDO);
+		compraSalva.setEnderecoDestino(compra.getEndereco().toString());
+		compraRepository.save(compraSalva);
+		
     	
     	final String estado =  compra.getEndereco().getEstado();
     	
@@ -62,13 +88,29 @@ public class CompraService {
     	
     	LOG.info("Realizando um pedido");
     	InfoPedidoDTO pedido = fornecedorClient.realizaPedido(compra.getItens());
+    	compraSalva.setStatus(CompraStatus.PEDIDO_REALIZADO);
+		compraRepository.save(compraSalva);
+		compra.setCompraId(compraSalva.getId());
     	
     	
-    	Compra compraSalva = new Compra();
+    	// Realizando request no serviço de transportador
+    	InfoEntregaDTO entregaDto = new InfoEntregaDTO();
+    	// Setamos a entrega
+    	entregaDto.setPedidoId(pedido.getId());
+    	entregaDto.setDataParaEntrega( LocalDate.now().plusDays(pedido.getTempoDePreparo()) );
+    	entregaDto.setEnderecoOrigem(info.getEndereco());
+    	entregaDto.setEnderecoDestino(compra.getEndereco().toString());
+    	// Realizando a reserva de entrega
+    	VoucherDTO voucher = transportadorClient.reservaEntrega(entregaDto);
+
+    	compraSalva.setStatus(CompraStatus.RESERVA_ENTREGA_REALIZADA);
+		compraRepository.save(compraSalva);
+    	
     	
     	compraSalva.setPedidoId(pedido.getId());
     	compraSalva.setTempoDePreparo(pedido.getTempoDePreparo());
-    	compraSalva.setEnderecoDestino(info.getEndereco());
+    	compraSalva.setDataParaEntrega(voucher.getPrevisaoParaEntrega());
+    	compraSalva.setVoucher( voucher.getNumero());
     	
     	compraRepository.save(compraSalva);
     	
@@ -83,6 +125,10 @@ public class CompraService {
     }
 	
 	public Compra realizaCompraFallback(CompraDTO compra ) {
+		if( compra.getCompraId() != null ) {
+			return compraRepository.findById(compra.getCompraId()).get();
+		}
+		
 		Compra compraFallback = new Compra();
 		compraFallback.setEnderecoDestino(compra.getEndereco().toString());
 		return compraFallback;
