@@ -79,10 +79,9 @@ public class CompraService {
 		compraSalva.setStatus(CompraStatus.RECEBIDO);
 		compraSalva.setEnderecoDestino(compra.getEndereco().toString());
 		compraRepository.save(compraSalva);
-		
+		compra.setCompraId(compraSalva.getId());
     	
     	final String estado =  compra.getEndereco().getEstado();
-    	
     	LOG.info("Buscando informação do fornecedor de {}", estado);
     	InfoFornecedorDTO info = fornecedorClient.getInfoPorEstado( estado );
     	
